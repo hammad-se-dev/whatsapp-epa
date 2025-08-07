@@ -48,16 +48,31 @@ router.post('/webhook', async (req, res) => {
     
     // Send response back to WhatsApp
     if (response) {
-      await client.messages.create({
-        body: response,
-        from: process.env.TWILIO_WHATSAPP_NUMBER,
-        to: from
-      });
+      // Check if in debug mode to avoid rate limits during testing
+      if (process.env.DEBUG_MODE === 'true') {
+        console.log('🤖 DEBUG - Bot would send:', response);
+        console.log('📱 To user:', whatsappNumber);
+        console.log('---');
+      } else {
+        await client.messages.create({
+          body: response,
+          from: process.env.TWILIO_WHATSAPP_NUMBER,
+          to: from
+        });
+      }
     }
     
     res.status(200).send('OK');
   } catch (error) {
     console.error('WhatsApp webhook error:', error);
+    
+    // Handle Twilio rate limiting
+    if (error.code === 63038) {
+      console.log('Hit Twilio daily message limit. Response not sent but processing completed.');
+      res.status(200).send('Rate limited but processed');
+      return;
+    }
+    
     res.status(500).send('Error processing message');
   }
 });
@@ -65,6 +80,44 @@ router.post('/webhook', async (req, res) => {
 // Main message processing function
 async function processMessage(user, message) {
   console.log(`Processing message for user ${user.whatsappNumber}, state: ${user.conversationState}`);
+  
+  const msg = message.toLowerCase().trim();
+  
+  // Handle global commands that work from any state (HIGHEST PRIORITY)
+  if (msg === 'restart' || msg === 'start over') {
+    user.conversationState = 'new_user';
+    user.tempJobData = {};
+    user.currentJobId = null;
+    user.role = null;
+    await user.save();
+    return handleNewUser(user);
+  }
+  
+  if (msg === 'hi' || msg === 'hello' || msg === 'hey' || msg === 'menu' || msg === 'help') {
+    return getMainMenu(user);
+  }
+  
+  if (msg === 'job posting' || msg === 'post job' || msg === 'post a job' || msg === 'hire' || msg === 'employer') {
+    user.role = 'employer';
+    user.conversationState = 'employer_entering_details';
+    user.tempJobData = { step: 'title' };
+    user.currentJobId = null;
+    await user.save();
+    return getJobPostingStep(user);
+  }
+  
+  if (msg === 'find jobs' || msg === 'jobs' || msg === 'job search' || msg === 'employee') {
+    user.role = 'employee';
+    user.conversationState = 'employee_choosing_category';
+    user.tempJobData = {};
+    user.currentJobId = null;
+    await user.save();
+    return getCategorySelection();
+  }
+  
+  if (msg === 'status') {
+    return handleStatusCommand(user);
+  }
   
   switch (user.conversationState) {
     case 'new_user':
@@ -92,7 +145,104 @@ async function processMessage(user, message) {
       return handleCompletedUser(user, message);
     
     default:
-      return "I'm having trouble understanding. Let me restart our conversation.";
+      user.conversationState = 'new_user';
+      await user.save();
+      return "I'm having trouble understanding. Let me restart our conversation.\n\n" + await handleNewUser(user);
+  }
+}
+
+// =============================================================================
+// UTILITY FUNCTIONS FOR CONSISTENT MESSAGING
+// =============================================================================
+
+function getMainMenu(user) {
+  return `🤖 *WhatsApp Job Portal* 👋\n\n` +
+    `Welcome${user.role ? ` back` : ''}! Here's what I can help you with:\n\n` +
+    `🔍 *For Job Seekers:*\n` +
+    `• Type *"jobs"* or *"find jobs"* to browse opportunities\n` +
+    `• Type *"status"* to check your applications\n\n` +
+    `💼 *For Employers:*\n` +
+    `• Type *"post job"* or *"job posting"* to hire talent\n` +
+    `• Type *"status"* to check your job posts\n\n` +
+    `🛠️ *Other Commands:*\n` +
+    `• Type *"help"* or *"menu"* to see this menu\n` +
+    `• Type *"restart"* to start fresh\n\n` +
+    `What would you like to do today?`;
+}
+
+function getCategorySelection() {
+  return `Great! Let's find you a job! 💼\n\nWhich category interests you?\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other\n\nReply with the number (1-7)`;
+}
+
+function getJobPostingStep(user) {
+  const tempData = user.tempJobData || { step: 'title' };
+  const step = tempData.step;
+  
+  // Show current progress
+  const stepNumbers = {
+    'title': '1/8',
+    'description': '2/8', 
+    'category': '3/8',
+    'salary': '4/8',
+    'location': '5/8',
+    'employmentType': '6/8',
+    'experience': '7/8',
+    'skills': '8/8',
+    'company': 'Final - Company',
+    'email': 'Final - Email'
+  };
+  
+  const currentProgress = stepNumbers[step] || '1/9';
+  
+  // Show what we have so far if not the first step
+  let progressSummary = '';
+  if (step !== 'title' && Object.keys(tempData).length > 1) {
+    progressSummary = `📋 *Progress so far:*\n`;
+    if (tempData.title) progressSummary += `✅ Title: ${tempData.title}\n`;
+    if (tempData.description) progressSummary += `✅ Description: ${tempData.description.substring(0, 50)}...\n`;
+    if (tempData.category) progressSummary += `✅ Category: ${tempData.category}\n`;
+    if (tempData.salary) progressSummary += `✅ Salary: ${tempData.salary}\n`;
+    if (tempData.location) progressSummary += `✅ Location: ${tempData.location}\n`;
+    if (tempData.employmentType) progressSummary += `✅ Type: ${tempData.employmentType}\n`;
+    if (tempData.experience) progressSummary += `✅ Experience: ${tempData.experience}\n`;
+    if (tempData.skills) progressSummary += `✅ Skills: ${tempData.skills.join(', ')}\n`;
+    if (tempData.companyName) progressSummary += `✅ Company: ${tempData.companyName}\n`;
+    progressSummary += '\n';
+  }
+  
+  switch (step) {
+    case 'title':
+      return `🎯 *Job Posting - Step ${currentProgress}*\n\nWhat's the *job title*?\n\nExample: "Senior Software Developer" or "Marketing Manager"`;
+    
+    case 'description':
+      return `${progressSummary}📝 *Job Posting - Step ${currentProgress}*\n\nPlease provide a *job description*.\n\nInclude responsibilities, requirements, and what makes this role exciting!\n\n(Write at least 50 characters)`;
+    
+    case 'category':
+      return `${progressSummary}📂 *Job Posting - Step ${currentProgress}*\n\nSelect the *job category*:\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other\n\nReply with the number (1-7)`;
+    
+    case 'salary':
+      return `${progressSummary}💰 *Job Posting - Step ${currentProgress}*\n\nWhat's the *salary range*?\n\nExample: "$50,000 - $70,000 per year" or "$25/hour"`;
+    
+    case 'location':
+      return `${progressSummary}📍 *Job Posting - Step ${currentProgress}*\n\nWhat's the *job location*?\n\nExample: "New York, NY", "Remote", or "San Francisco, CA (Hybrid)"`;
+    
+    case 'employmentType':
+      return `${progressSummary}⏰ *Job Posting - Step ${currentProgress}*\n\nSelect *employment type*:\n\n1️⃣ Full-time\n2️⃣ Part-time\n3️⃣ Contract\n4️⃣ Freelance\n\nReply with the number (1-4)`;
+    
+    case 'experience':
+      return `${progressSummary}🎯 *Job Posting - Step ${currentProgress}*\n\nWhat *experience level* is required?\n\nExample: "2-5 years", "Entry level", or "Senior level (5+ years)"`;
+    
+    case 'skills':
+      return `${progressSummary}🛠️ *Job Posting - Step ${currentProgress}*\n\nList the *key skills* required (separate with commas):\n\nExample: "JavaScript, React, Node.js" or "SEO, Content Marketing, Analytics"`;
+    
+    case 'company':
+      return `${progressSummary}🏢 *Job Posting - Step ${currentProgress}*\n\nWhat's your *company name*?`;
+    
+    case 'email':
+      return `${progressSummary}📧 *Final Step!*\n\nWhat's your *contact email* for applications?`;
+    
+    default:
+      return `🎯 *Job Posting - Step 1/9*\n\nWhat's the *job title*?\n\nExample: "Senior Software Developer" or "Marketing Manager"`;
   }
 }
 
@@ -104,7 +254,7 @@ async function handleNewUser(user) {
   user.conversationState = 'choosing_role';
   await user.save();
   
-  return `Welcome to WhatsApp Job Portal! 👋\n\nI can help you with:\n\n1️⃣ Find a Job (Job Seeker)\n2️⃣ Post a Job (Employer)\n\nReply with *1* or *2*`;
+  return getMainMenu(user);
 }
 
 // =============================================================================
@@ -119,7 +269,7 @@ async function handleRoleSelection(user, message) {
     user.conversationState = 'employee_choosing_category';
     await user.save();
     
-    return `Great! Let's find you a job! 💼\n\nWhich category interests you?\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other\n\nReply with the number (1-7)`;
+    return getCategorySelection();
   }
   
   if (choice === '2') {
@@ -128,10 +278,10 @@ async function handleRoleSelection(user, message) {
     user.tempJobData = { step: 'title' };
     await user.save();
     
-    return `Perfect! Let's post your job! 📝\n\nStep 1/8: What's the *job title*?\n\nExample: "Senior Software Developer" or "Marketing Manager"`;
+    return getJobPostingStep(user);
   }
   
-  return `Please reply with *1* for Job Seeker or *2* for Employer`;
+  return getMainMenu(user);
 }
 
 // =============================================================================
@@ -142,7 +292,7 @@ async function handleCategorySelection(user, message) {
   const choice = message.trim();
   
   if (!CATEGORIES[choice]) {
-    return `Please select a valid category (1-7):\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other`;
+    return getCategorySelection();
   }
   
   const selectedCategory = CATEGORIES[choice];
@@ -180,10 +330,26 @@ async function handleJobViewing(user, message) {
   const choice = parseInt(message.trim());
   
   // Check if user wants to go back to category selection
-  if (message.toLowerCase().includes('back') || message === '1') {
+  if (message.toLowerCase().includes('back')) {
     user.conversationState = 'employee_choosing_category';
     await user.save();
-    return `Which category interests you?\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other`;
+    return getCategorySelection();
+  }
+  
+  // Handle "choose another category" option when no jobs available
+  if (message.trim() === '1' && user.preferredCategory) {
+    // Check if this is from the "no jobs available" scenario
+    const jobs = await Job.find({ 
+      category: user.preferredCategory, 
+      status: 'live' 
+    });
+    
+    if (jobs.length === 0) {
+      // User chose to select another category
+      user.conversationState = 'employee_choosing_category';
+      await user.save();
+      return getCategorySelection();
+    }
   }
   
   // Get jobs in user's preferred category
@@ -192,7 +358,7 @@ async function handleJobViewing(user, message) {
     status: 'live' 
   }).limit(5).sort({ createdAt: -1 });
   
-  if (choice < 1 || choice > jobs.length) {
+  if (isNaN(choice) || choice < 1 || choice > jobs.length) {
     return `Please select a valid job number (1-${jobs.length}) or type "back" to choose another category.`;
   }
   
@@ -259,8 +425,8 @@ async function handleEmployeePaymentCheck(user, message) {
       });
       await application.save();
       
-      // Create payment link (you'll need to implement a simple payment page)
-      const paymentLink = `${process.env.FRONTEND_URL}/payment?pi=${paymentIntent.client_secret}`;
+      // Create payment link
+      const paymentLink = `${process.env.FRONTEND_URL}/payment?pi=${paymentIntent.client_secret}&type=application&amount=500`;
       
       return `💳 *Payment Required*\n\nClick here to pay your $5 application fee:\n${paymentLink}\n\n✅ After payment, your application will be submitted automatically!\n\n⏰ Payment link expires in 30 minutes.`;
       
@@ -284,86 +450,143 @@ async function handleEmployeePaymentCheck(user, message) {
 // =============================================================================
 
 async function handleEmployerJobEntry(user, message) {
-  const tempData = user.tempJobData || {};
+  const tempData = user.tempJobData || { step: 'title' };
   const step = tempData.step;
+  
+  console.log(`🔍 Employer job entry - Step: ${step}, Message: "${message}", Message length: ${message.trim().length}`); // Enhanced debug log
+  
+  // If user sends anything other than valid input, refresh the current step
+  const msg = message.toLowerCase().trim();
+  
+  // Handle back command
+  if (msg === 'back' || msg === 'previous') {
+    const stepOrder = ['title', 'description', 'category', 'salary', 'location', 'employmentType', 'experience', 'skills', 'company', 'email'];
+    const currentIndex = stepOrder.indexOf(step);
+    if (currentIndex > 0) {
+      tempData.step = stepOrder[currentIndex - 1];
+      user.tempJobData = tempData;
+      await user.save();
+    }
+    return getJobPostingStep(user);
+  }
   
   switch (step) {
     case 'title':
+      if (!message || message.trim().length < 3) {
+        console.log('❌ Title validation failed');
+        return `Please provide a proper job title (at least 3 characters).\n\nExample: "Senior Software Developer" or "Marketing Manager"`;
+      }
       tempData.title = message.trim();
       tempData.step = 'description';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 2/8: Please provide a *job description*.\n\nInclude responsibilities, requirements, and what makes this role exciting!`;
+      console.log('✅ Title saved, moving to description step');
+      return getJobPostingStep(user);
     
     case 'description':
+      if (!message || message.trim().length < 10) {
+        console.log('❌ Description validation failed');
+        return `Please provide a job description (at least 10 characters).\n\nInclude responsibilities, requirements, and what makes this role exciting!`;
+      }
       tempData.description = message.trim();
       tempData.step = 'category';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 3/8: Select the *job category*:\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other\n\nReply with the number (1-7)`;
+      console.log('✅ Description saved, moving to category step'); // Debug log
+      return getJobPostingStep(user);
     
     case 'category':
       const categoryChoice = message.trim();
       if (!CATEGORIES[categoryChoice]) {
-        return `Please select a valid category (1-7)`;
+        console.log('❌ Category validation failed');
+        return getJobPostingStep(user);
       }
       tempData.category = CATEGORIES[categoryChoice];
       tempData.step = 'salary';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 4/8: What's the *salary range*?\n\nExample: "$50,000 - $70,000 per year" or "$25/hour"`;
+      console.log('✅ Category saved, moving to salary step');
+      return getJobPostingStep(user);
     
     case 'salary':
+      if (!message || message.trim().length < 3) {
+        console.log('❌ Salary validation failed');
+        return getJobPostingStep(user);
+      }
       tempData.salary = message.trim();
       tempData.step = 'location';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 5/8: What's the *job location*?\n\nExample: "New York, NY", "Remote", or "San Francisco, CA (Hybrid)"`;
+      console.log('✅ Salary saved, moving to location step');
+      return getJobPostingStep(user);
     
     case 'location':
+      if (!message || message.trim().length < 2) {
+        console.log('❌ Location validation failed');
+        return getJobPostingStep(user);
+      }
       tempData.location = message.trim();
       tempData.step = 'employmentType';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 6/8: Select *employment type*:\n\n1️⃣ Full-time\n2️⃣ Part-time\n3️⃣ Contract\n4️⃣ Freelance\n\nReply with the number (1-4)`;
+      console.log('✅ Location saved, moving to employment type step');
+      return getJobPostingStep(user);
     
     case 'employmentType':
       const typeChoice = message.trim();
       if (!EMPLOYMENT_TYPES[typeChoice]) {
-        return `Please select a valid employment type (1-4)`;
+        console.log('❌ Employment type validation failed');
+        return getJobPostingStep(user);
       }
       tempData.employmentType = EMPLOYMENT_TYPES[typeChoice];
       tempData.step = 'experience';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 7/8: What *experience level* is required?\n\nExample: "2-5 years", "Entry level", or "Senior level (5+ years)"`;
+      console.log('✅ Employment type saved, moving to experience step');
+      return getJobPostingStep(user);
     
     case 'experience':
+      if (!message || message.trim().length < 3) {
+        console.log('❌ Experience validation failed');
+        return getJobPostingStep(user);
+      }
       tempData.experience = message.trim();
       tempData.step = 'skills';
       user.tempJobData = tempData;
       await user.save();
-      return `Step 8/8: List the *key skills* required (separate with commas):\n\nExample: "JavaScript, React, Node.js" or "SEO, Content Marketing, Analytics"`;
+      console.log('✅ Experience saved, moving to skills step');
+      return getJobPostingStep(user);
     
     case 'skills':
+      if (!message || message.trim().length < 3) {
+        console.log('❌ Skills validation failed');
+        return getJobPostingStep(user);
+      }
       tempData.skills = message.split(',').map(skill => skill.trim()).filter(skill => skill.length > 0);
       tempData.step = 'company';
       user.tempJobData = tempData;
       await user.save();
-      return `Almost done! What's your *company name*?`;
+      console.log('✅ Skills saved, moving to company step');
+      return getJobPostingStep(user);
     
     case 'company':
+      if (!message || message.trim().length < 2) {
+        console.log('❌ Company validation failed');
+        return getJobPostingStep(user);
+      }
       tempData.companyName = message.trim();
       user.companyName = message.trim(); // Store in user profile too
       tempData.step = 'email';
       user.tempJobData = tempData;
       await user.save();
-      return `Last step! What's your *contact email* for applications?`;
+      console.log('✅ Company saved, moving to email step');
+      return getJobPostingStep(user);
     
     case 'email':
       const email = message.trim().toLowerCase();
       if (!isValidEmail(email)) {
-        return `Please provide a valid email address.`;
+        console.log('❌ Email validation failed');
+        return `Please provide a valid email address.\n\nExample: hiring@company.com`;
       }
       
       tempData.contactEmail = email;
@@ -379,17 +602,23 @@ async function handleEmployerJobEntry(user, message) {
         `🎯 ${tempData.experience}\n` +
         `🛠️ ${tempData.skills.join(', ')}\n` +
         `📧 ${tempData.contactEmail}\n\n` +
-        `*Description:*\n${tempData.description}\n\n` +
+        `*Description:*\n${tempData.description.substring(0, 200)}${tempData.description.length > 200 ? '...' : ''}\n\n` +
         `💳 *Posting fee: $20*\n\n` +
         `Reply *"post"* to proceed with payment, or *"edit"* to make changes.`;
       
       user.conversationState = 'employer_payment_pending';
       await user.save();
+      console.log('✅ Email saved, moving to payment step');
       
       return preview;
+      
+    default:
+      // Reset if invalid step
+      console.log('❌ Invalid step, resetting');
+      user.tempJobData = { step: 'title' };
+      await user.save();
+      return getJobPostingStep(user);
   }
-  
-  return `I'm having trouble processing your information. Let's start over. Type "restart" to begin again.`;
 }
 
 async function handleEmployerPaymentCheck(user, message) {
@@ -398,6 +627,15 @@ async function handleEmployerPaymentCheck(user, message) {
   if (msg === 'post') {
     try {
       const tempData = user.tempJobData;
+      
+      // Validate temp data
+      if (!tempData || !tempData.title || !tempData.description) {
+        user.conversationState = 'employer_entering_details';
+        user.tempJobData = { step: 'title' };
+        await user.save();
+        return getJobPostingStep(user);
+      }
+      
       // Create Stripe payment intent
       const paymentIntent = await stripe.paymentIntents.create({
         amount: 2000, // $20.00 in cents
@@ -428,7 +666,7 @@ async function handleEmployerPaymentCheck(user, message) {
       await job.save();
       
       // Create payment link
-      const paymentLink = `${process.env.FRONTEND_URL}/payment?pi=${paymentIntent.client_secret}`;
+      const paymentLink = `${process.env.FRONTEND_URL}/payment?pi=${paymentIntent.client_secret}&type=job_posting&amount=2000`;
       
       // Clear temp data
       user.tempJobData = {};
@@ -446,7 +684,7 @@ async function handleEmployerPaymentCheck(user, message) {
     user.conversationState = 'employer_entering_details';
     user.tempJobData = { step: 'title' };
     await user.save();
-    return `Let's start over! What's the *job title*?`;
+    return getJobPostingStep(user);
   }
   
   return `Please reply *"post"* to proceed with payment or *"edit"* to make changes.`;
@@ -461,75 +699,25 @@ async function handleCompletedUser(user, message) {
   
   if (msg === 'jobs' || msg === 'find jobs') {
     user.conversationState = 'employee_choosing_category';
+    user.role = 'employee'; // Ensure role is set
     await user.save();
-    return `Which category interests you?\n\n1️⃣ Tech\n2️⃣ Marketing\n3️⃣ Sales\n4️⃣ Finance\n5️⃣ HR\n6️⃣ Operations\n7️⃣ Other`;
+    return getCategorySelection();
   }
   
-  if (msg === 'post job' || msg === 'post') {
+  if (msg === 'post job' || msg === 'post' || msg === 'job posting') {
     user.role = 'employer';
     user.conversationState = 'employer_entering_details';
     user.tempJobData = { step: 'title' };
     await user.save();
-    return `Let's post your job! 📝\n\nStep 1/8: What's the *job title*?`;
+    return getJobPostingStep(user);
   }
   
   if (msg === 'help' || msg === 'menu') {
-    return `🤖 *WhatsApp Job Portal Menu:*\n\n` +
-      `• Type *"jobs"* to find job opportunities\n` +
-      `• Type *"post job"* to post a new job\n` +
-      `• Type *"status"* to check your applications\n` +
-      `• Type *"help"* to see this menu\n\n` +
-      `What would you like to do today?`;
+    return getMainMenu(user);
   }
   
-  if (msg === 'status') {
-    if (user.role === 'employee') {
-      const applications = await Application.find({ userId: user._id })
-        .populate('jobId', 'title companyName')
-        .sort({ applicationDate: -1 })
-        .limit(5);
-      
-      if (applications.length === 0) {
-        return `You haven't applied to any jobs yet. Type *"jobs"* to start exploring!`;
-      }
-      
-      let statusMsg = `📊 *Your Application Status:*\n\n`;
-      applications.forEach((app, index) => {
-        statusMsg += `${index + 1}. *${app.jobId.title}* at ${app.jobId.companyName}\n`;
-        statusMsg += `   Status: *${app.applicationStatus}*\n`;
-        statusMsg += `   Payment: *${app.paymentStatus}*\n\n`;
-      });
-      
-      return statusMsg + `Type *"jobs"* to find more opportunities!`;
-    }
-    
-    if (user.role === 'employer') {
-      const jobs = await Job.find({ employerId: user._id })
-        .sort({ createdAt: -1 })
-        .limit(5);
-      
-      if (jobs.length === 0) {
-        return `You haven't posted any jobs yet. Type *"post job"* to get started!`;
-      }
-      
-      let statusMsg = `📊 *Your Job Posts:*\n\n`;
-      jobs.forEach((job, index) => {
-        statusMsg += `${index + 1}. *${job.title}*\n`;
-        statusMsg += `   Status: *${job.status}*\n`;
-        statusMsg += `   Payment: *${job.paymentStatus}*\n\n`;
-      });
-      
-      return statusMsg + `Type *"post job"* to create another posting!`;
-    }
-  }
-  
-  // Default response
-  return `Hi! 👋 Welcome back to WhatsApp Job Portal!\n\n` +
-    `• Type *"jobs"* to find opportunities\n` +
-    `• Type *"post job"* to hire talent\n` +
-    `• Type *"status"* to check your activity\n` +
-    `• Type *"help"* for more options\n\n` +
-    `What can I help you with today?`;
+  // Default response - show main menu
+  return getMainMenu(user);
 }
 
 // =============================================================================
@@ -539,6 +727,51 @@ async function handleCompletedUser(user, message) {
 function isValidEmail(email) {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
+}
+
+async function handleStatusCommand(user) {
+  if (!user.role) {
+    return `You haven't started using the portal yet! Type "jobs" to find work or "post job" to hire.`;
+  }
+  
+  if (user.role === 'employee') {
+    const applications = await Application.find({ userId: user._id })
+      .populate('jobId', 'title companyName')
+      .sort({ applicationDate: -1 })
+      .limit(5);
+    
+    if (applications.length === 0) {
+      return `You haven't applied to any jobs yet. Type *"jobs"* to start exploring!`;
+    }
+    
+    let statusMsg = `📊 *Your Application Status:*\n\n`;
+    applications.forEach((app, index) => {
+      statusMsg += `${index + 1}. *${app.jobId.title}* at ${app.jobId.companyName}\n`;
+      statusMsg += `   Status: *${app.applicationStatus}*\n`;
+      statusMsg += `   Payment: *${app.paymentStatus}*\n\n`;
+    });
+    
+    return statusMsg + `Type *"jobs"* to find more opportunities!`;
+  }
+  
+  if (user.role === 'employer') {
+    const jobs = await Job.find({ employerId: user._id })
+      .sort({ createdAt: -1 })
+      .limit(5);
+    
+    if (jobs.length === 0) {
+      return `You haven't posted any jobs yet. Type *"post job"* to get started!`;
+    }
+    
+    let statusMsg = `📊 *Your Job Posts:*\n\n`;
+    jobs.forEach((job, index) => {
+      statusMsg += `${index + 1}. *${job.title}*\n`;
+      statusMsg += `   Status: *${job.status}*\n`;
+      statusMsg += `   Payment: *${job.paymentStatus || 'pending'}*\n\n`;
+    });
+    
+    return statusMsg + `Type *"post job"* to create another posting!`;
+  }
 }
 
 export default router;
