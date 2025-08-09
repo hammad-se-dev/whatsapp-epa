@@ -387,8 +387,9 @@ async function handleJobViewing(user, message) {
     `💳 *Ready to apply? Application fee: $5*\n\n` +
     `Reply *"apply"* to proceed with payment, or *"back"* to see other jobs.`;
   
-  // Store the job ID for application
+  // Store the job ID for application and change state
   user.currentJobId = selectedJob._id;
+  user.conversationState = 'employee_payment_pending';
   await user.save();
   
   return jobDetails;
@@ -450,10 +451,12 @@ async function handleEmployeePaymentCheck(user, message) {
 // =============================================================================
 
 async function handleEmployerJobEntry(user, message) {
-  const tempData = user.tempJobData || { step: 'title' };
+  // Create a fresh copy of tempData to avoid reference issues
+  const tempData = { ...(user.tempJobData || { step: 'title' }) };
   const step = tempData.step;
   
-  console.log(`🔍 Employer job entry - Step: ${step}, Message: "${message}", Message length: ${message.trim().length}`); // Enhanced debug log
+  console.log(`🔍 Employer job entry - Step: ${step}, Message: "${message}", Message length: ${message.trim().length}`);
+  console.log(`🔍 Current tempData:`, JSON.stringify(tempData));
   
   // If user sends anything other than valid input, refresh the current step
   const msg = message.toLowerCase().trim();
@@ -484,15 +487,15 @@ async function handleEmployerJobEntry(user, message) {
       return getJobPostingStep(user);
     
     case 'description':
-      if (!message || message.trim().length < 10) {
+      if (!message || message.trim().length < 50) {
         console.log('❌ Description validation failed');
-        return `Please provide a job description (at least 10 characters).\n\nInclude responsibilities, requirements, and what makes this role exciting!`;
+        return `Please provide a job description (at least 50 characters).\n\nInclude responsibilities, requirements, and what makes this role exciting!`;
       }
       tempData.description = message.trim();
       tempData.step = 'category';
       user.tempJobData = tempData;
       await user.save();
-      console.log('✅ Description saved, moving to category step'); // Debug log
+      console.log('✅ Description saved, moving to category step');
       return getJobPostingStep(user);
     
     case 'category':
@@ -590,6 +593,8 @@ async function handleEmployerJobEntry(user, message) {
       }
       
       tempData.contactEmail = email;
+      user.tempJobData = tempData; // Add this line to save tempData
+      await user.save();
       
       // Create job posting preview
       const preview = `📋 *Job Posting Preview:*\n\n` +
@@ -629,7 +634,8 @@ async function handleEmployerPaymentCheck(user, message) {
       const tempData = user.tempJobData;
       
       // Validate temp data
-      if (!tempData || !tempData.title || !tempData.description) {
+      if (!tempData || !tempData.title || !tempData.description || !tempData.contactEmail) {
+        console.log('❌ Missing required data:', tempData);
         user.conversationState = 'employer_entering_details';
         user.tempJobData = { step: 'title' };
         await user.save();
@@ -666,7 +672,8 @@ async function handleEmployerPaymentCheck(user, message) {
       await job.save();
       
       // Create payment link
-      const paymentLink = `${process.env.FRONTEND_URL}/payment?pi=${paymentIntent.client_secret}&type=job_posting&amount=2000`;
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const paymentLink = `${frontendUrl}/payment?pi=${paymentIntent.client_secret}&type=job_posting&amount=2000`;
       
       // Clear temp data
       user.tempJobData = {};
@@ -763,7 +770,7 @@ async function handleStatusCommand(user) {
       return `You haven't posted any jobs yet. Type *"post job"* to get started!`;
     }
     
-    let statusMsg = `📊 *Your Job Posts:*\n\n`;
+    let statusMsg = `📋 *Your Job Posts:*\n\n`;
     jobs.forEach((job, index) => {
       statusMsg += `${index + 1}. *${job.title}*\n`;
       statusMsg += `   Status: *${job.status}*\n`;
@@ -775,3 +782,4 @@ async function handleStatusCommand(user) {
 }
 
 export default router;
+export { processMessage };
