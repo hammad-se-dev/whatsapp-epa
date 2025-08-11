@@ -413,7 +413,11 @@ async function handleEmployeePaymentCheck(user, message) {
           type: 'job_application',
           jobId: user.currentJobId.toString(),
           userId: user._id.toString()
-        }
+        },
+        automatic_payment_methods: {
+          enabled: true,
+          allow_redirects: 'never',
+        },
       });
       
       // Create pending application record
@@ -427,7 +431,8 @@ async function handleEmployeePaymentCheck(user, message) {
       await application.save();
       
       // Create payment link
-      const paymentLink = `${process.env.FRONTEND_URL}/payment?pi=${paymentIntent.client_secret}&type=application&amount=500`;
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const paymentLink = `${frontendUrl}/payment?pi=${paymentIntent.client_secret}&type=application&amount=500`;
       
       return `💳 *Payment Required*\n\nClick here to pay your $5 application fee:\n${paymentLink}\n\n✅ After payment, your application will be submitted automatically!\n\n⏰ Payment link expires in 30 minutes.`;
       
@@ -649,7 +654,11 @@ async function handleEmployerPaymentCheck(user, message) {
         metadata: {
           type: 'job_posting',
           userId: user._id.toString()
-        }
+        },
+        automatic_payment_methods: {
+          enabled: true,
+          allow_redirects: 'never',
+        },
       });
       
       // Create job record
@@ -670,10 +679,17 @@ async function handleEmployerPaymentCheck(user, message) {
       });
       
       await job.save();
+      console.log(`✅ Job saved to database:`, {
+        id: job._id,
+        title: job.title,
+        paymentIntentId: job.paymentIntentId,
+        status: job.status,
+        paymentStatus: job.paymentStatus
+      });
       
-      // Create payment link
+      // Create payment link that redirects to frontend payment page
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      const paymentLink = `${frontendUrl}/payment?pi=${paymentIntent.client_secret}&type=job_posting&amount=2000`;
+      const paymentLink = `${frontendUrl}/payment?pi=${paymentIntent.client_secret}&type=job_posting&amount=2000&title=${encodeURIComponent(tempData.title)}&company=${encodeURIComponent(tempData.companyName)}`;
       
       // Clear temp data
       user.tempJobData = {};

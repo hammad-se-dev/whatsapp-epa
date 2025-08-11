@@ -32,7 +32,70 @@ const rl = readline.createInterface({
 // Current active user for testing
 let currentTestUser = TEST_USER_NUMBER;
 
-// Payment simulation functions
+// Real payment processing function
+async function processRealPayment(paymentIntentId, metadata) {
+  try {
+    console.log(`\n💳 PROCESSING REAL PAYMENT for ${paymentIntentId}`);
+    
+    if (!stripe) {
+      throw new Error('Stripe not initialized - check your STRIPE_SECRET_KEY');
+    }
+    
+    // Confirm the payment intent with Stripe
+    const paymentIntent = await stripe.paymentIntents.confirm(paymentIntentId, {
+      payment_method: 'pm_card_visa', // Use test card
+    });
+    
+    if (paymentIntent.status === 'succeeded') {
+      console.log(`✅ Real payment confirmed with Stripe: ${paymentIntentId}`);
+      
+      if (metadata.type === 'job_application') {
+        const application = await Application.findOne({ paymentIntentId })
+          .populate('jobId', 'title companyName')
+          .populate('userId', 'whatsappNumber');
+        
+        if (application) {
+          application.paymentStatus = 'completed';
+          application.paymentDate = new Date();
+          await application.save();
+          
+          await User.findByIdAndUpdate(application.userId._id, {
+            conversationState: 'completed'
+          });
+          
+          console.log(`✅ Application payment completed for job: ${application.jobId.title}`);
+          return `🎉 *Real Payment Successful!* ✅\n\nYour application for *${application.jobId.title}* at ${application.jobId.companyName} has been submitted!\n\n📋 Application ID: ${application._id}\n💰 Paid: $5.00\n📅 Date: ${new Date().toLocaleDateString()}\n\nThe employer will review your application and contact you directly if you're a good fit.\n\nType *"status"* to check your applications or *"jobs"* to find more opportunities!`;
+        }
+      }
+      
+      if (metadata.type === 'job_posting') {
+        const job = await Job.findOne({ paymentIntentId })
+          .populate('employerId', 'whatsappNumber companyName');
+        
+        if (job) {
+          job.paymentStatus = 'completed';
+          await job.save();
+          
+          await User.findByIdAndUpdate(job.employerId._id, {
+            conversationState: 'completed'
+          });
+          
+          console.log(`✅ Job posting payment completed for: ${job.title}`);
+          return `🎉 *Real Payment Successful!* ✅\n\nYour job posting for *${job.title}* has been submitted for review!\n\n📋 Job ID: ${job._id}\n💰 Paid: $20.00\n📅 Date: ${new Date().toLocaleDateString()}\n\n⏳ Our team will review your job posting within 24 hours. Once approved, it will be visible to job seekers.\n\nYou'll receive another message when your job goes live!\n\nType *"status"* to check your job posts or *"post job"* to create another listing.`;
+        }
+      }
+      
+      return 'Real payment processed but no matching record found.';
+    } else {
+      throw new Error(`Payment failed with status: ${paymentIntent.status}`);
+    }
+  } catch (error) {
+    console.error('Real payment processing error:', error);
+    return `❌ Real payment failed: ${error.message}`;
+  }
+}
+
+// Payment simulation functions (keep for backward compatibility)
 async function simulatePaymentSuccess(paymentIntentId, metadata) {
   try {
     console.log(`\n💳 SIMULATING PAYMENT SUCCESS for ${paymentIntentId}`);
@@ -103,7 +166,34 @@ async function handleSpecialCommands(input) {
     }
   }
   
-  // Payment simulation commands
+  // Real payment processing commands
+  if (input.startsWith('/realpay ')) {
+    const paymentId = input.split(' ')[1];
+    if (!paymentId) {
+      console.log('❌ Usage: /realpay <payment_intent_id>');
+      return true;
+    }
+    
+    // Find the payment intent in our database
+    let record = await Application.findOne({ paymentIntentId: paymentId });
+    let metadata = { type: 'job_application' };
+    
+    if (!record) {
+      record = await Job.findOne({ paymentIntentId: paymentId });
+      metadata = { type: 'job_posting' };
+    }
+    
+    if (!record) {
+      console.log('❌ Payment intent not found in database');
+      return true;
+    }
+    
+    const result = await processRealPayment(paymentId, metadata);
+    console.log(`\n💰 REAL PAYMENT RESULT:\n${result}\n`);
+    return true;
+  }
+  
+  // Payment simulation commands (keep for backward compatibility)
   if (input.startsWith('/pay ')) {
     const paymentId = input.split(' ')[1];
     if (!paymentId) {
@@ -172,8 +262,9 @@ async function handleSpecialCommands(input) {
 /user employee     - Switch to employee test user  
 /user default      - Switch to default test user
 
-💳 PAYMENT TESTING:
-/pay <payment_id>  - Simulate successful payment
+�� PAYMENT TESTING:
+/realpay <payment_id>  - Process REAL Stripe payment
+/pay <payment_id>      - Simulate successful payment
 
 📊 DATABASE QUERIES:
 /jobs              - Show recent jobs
@@ -184,8 +275,7 @@ async function handleSpecialCommands(input) {
 /help              - Show this help
 exit               - Quit the application
 
-💡 TIP: After getting a payment link, copy the payment intent ID
-    and use '/pay <id>' to simulate successful payment!
+💡 TIP: Use /realpay for actual Stripe payments, /pay for simulation!
 `);
     return true;
   }
@@ -246,9 +336,13 @@ async function chatLoop() {
       if (response.includes('payment?pi=')) {
         const paymentMatch = response.match(/pi=([^&\s]+)/);
         if (paymentMatch) {
-          const paymentIntentId = paymentMatch[1];
+          const fullPaymentId = paymentMatch[1];
+          // Extract just the payment intent ID (before _secret_)
+          const paymentIntentId = fullPaymentId.split('_secret_')[0];
+          
           console.log(`\n🤖 BOT: ${response}\n`);
-          console.log(`💡 TIP: To simulate payment, use: /pay ${paymentIntentId}\n`);
+          console.log(`💡 TIP: For REAL payment, use: /realpay ${paymentIntentId}\n`);
+          console.log(`💡 TIP: For simulation, use: /pay ${paymentIntentId}\n`);
         } else {
           console.log(`\n🤖 BOT: ${response}\n`);
         }

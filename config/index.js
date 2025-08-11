@@ -6,7 +6,7 @@ export const config = {
   port: process.env.PORT || 3001,
   mongoUri: process.env.MONGODB_URI,
   nodeEnv: process.env.NODE_ENV || 'development',
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID,
     authToken: process.env.TWILIO_AUTH_TOKEN,

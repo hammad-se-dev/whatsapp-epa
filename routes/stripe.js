@@ -172,6 +172,7 @@ router.post('/create-payment-intent', async (req, res) => {
       },
       automatic_payment_methods: {
         enabled: true,
+        allow_redirects: 'never',
       },
     });
     
@@ -199,6 +200,7 @@ router.post('/create-job-payment-intent', async (req, res) => {
       },
       automatic_payment_methods: {
         enabled: true,
+        allow_redirects: 'never',
       },
     });
     
@@ -285,6 +287,118 @@ router.post('/notify-job-rejected', async (req, res) => {
     res.json({ message: 'Rejection notification sent successfully' });
   } catch (error) {
     console.error('Error sending rejection notification:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add this new route for direct payment processing
+router.get('/direct-pay', async (req, res) => {
+  try {
+    const { pi: paymentIntentId, type, amount } = req.query;
+    
+    if (!paymentIntentId || !type) {
+      return res.status(400).json({ error: 'Missing payment intent ID or type' });
+    }
+    
+    console.log(`💳 Processing direct payment: ${paymentIntentId}, type: ${type}`);
+    
+    // Get the payment intent to check its status
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    
+    if (paymentIntent.status === 'succeeded') {
+      console.log(`✅ Direct payment succeeded: ${paymentIntentId}`);
+      
+      // Update database based on type
+      if (type === 'job_posting') {
+        console.log(`🔍 Looking for job with paymentIntentId: ${paymentIntentId}`);
+        
+        const job = await Job.findOne({ paymentIntentId })
+          .populate('employerId', 'whatsappNumber companyName');
+        
+        console.log(`🔍 Job found:`, job ? `Yes - ${job.title}` : 'No');
+        
+        if (job) {
+          console.log(`📝 Updating job payment status from ${job.paymentStatus} to completed`);
+          job.paymentStatus = 'completed';
+          await job.save();
+          console.log(`✅ Job payment status updated successfully`);
+          
+          await User.findByIdAndUpdate(job.employerId._id, {
+            conversationState: 'completed'
+          });
+          
+          return res.json({
+            success: true,
+            message: ` Payment successful! Your job posting "${job.title}" has been submitted for review.`,
+            jobId: job._id,
+            paymentStatus: 'completed'
+          });
+        } else {
+          console.log(`❌ No job found with paymentIntentId: ${paymentIntentId}`);
+          return res.status(404).json({
+            error: 'Job not found with this payment intent'
+          });
+        }
+      }
+      
+      if (type === 'job_application') {
+        const application = await Application.findOne({ paymentIntentId })
+          .populate('jobId', 'title companyName')
+          .populate('userId', 'whatsappNumber');
+        
+        if (application) {
+          application.paymentStatus = 'completed';
+          application.paymentDate = new Date();
+          await application.save();
+          
+          await User.findByIdAndUpdate(application.userId._id, {
+            conversationState: 'completed'
+          });
+          
+          return res.json({
+            success: true,
+            message: ` Payment successful! Your application for "${application.jobId.title}" has been submitted.`,
+            applicationId: application._id,
+            paymentStatus: 'completed'
+          });
+        }
+      }
+      
+      return res.json({
+        success: true,
+        message: 'Payment processed successfully!'
+      });
+    } else {
+      return res.status(400).json({
+        error: `Payment failed with status: ${paymentIntent.status}`
+      });
+    }
+  } catch (error) {
+    console.error('Direct payment error:', error);
+    return res.status(500).json({
+      error: `Payment processing failed: ${error.message}`
+    });
+  }
+});
+
+// Test endpoint to check jobs in database
+router.get('/test-jobs', async (req, res) => {
+  try {
+    const jobs = await Job.find({}).sort({ createdAt: -1 }).limit(10);
+    res.json({
+      success: true,
+      jobs: jobs.map(job => ({
+        id: job._id,
+        title: job.title,
+        companyName: job.companyName,
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        paymentIntentId: job.paymentIntentId,
+        createdAt: job.createdAt
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching test jobs:', error);
     res.status(500).json({ error: error.message });
   }
 });
