@@ -1,10 +1,11 @@
 import express from 'express';
 import { User, Application, Job } from '../models/index.js';
+import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get all users (for admin portal)
-router.get('/', async (req, res) => {
+// Get all users (for admin portal) - requires authentication
+router.get('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { role, page = 1, limit = 10 } = req.query;
     
@@ -30,8 +31,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get user analytics
-router.get('/analytics', async (req, res) => {
+// Get user analytics - requires authentication
+router.get('/analytics', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
     const employees = await User.countDocuments({ role: 'employee' });
@@ -77,8 +78,8 @@ router.get('/analytics', async (req, res) => {
   }
 });
 
-// Get specific user details
-router.get('/:id', async (req, res) => {
+// Get specific user details - requires authentication
+router.get('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     

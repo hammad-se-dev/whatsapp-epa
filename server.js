@@ -9,6 +9,7 @@ import whatsappRoutes from './routes/whatsapp.js';
 import stripeRoutes from './routes/stripe.js';
 import jobsRoutes from './routes/jobs.js';
 import usersRoutes from './routes/users.js';
+import authRoutes from './routes/auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -45,17 +46,19 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Debug endpoint to check environment variables
-app.get('/api/debug/env', (req, res) => {
-  const envVars = {
-    NODE_ENV: process.env.NODE_ENV,
-    PORT: process.env.PORT,
-    STRIPE_PUBLISHABLE_KEY: process.env.STRIPE_PUBLISHABLE_KEY ? 'SET' : 'NOT SET',
-    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'SET' : 'NOT SET',
-    MONGODB_URI: process.env.MONGODB_URI ? 'SET' : 'NOT SET'
-  };
-  res.json(envVars);
-});
+// Debug endpoint to check environment variables (only in development)
+if (process.env.NODE_ENV === 'development') {
+  app.get('/api/debug/env', (req, res) => {
+    const envVars = {
+      NODE_ENV: process.env.NODE_ENV,
+      PORT: process.env.PORT,
+      STRIPE_PUBLISHABLE_KEY: process.env.STRIPE_PUBLISHABLE_KEY ? 'SET' : 'NOT SET',
+      STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY ? 'SET' : 'NOT SET',
+      MONGODB_URI: process.env.MONGODB_URI ? 'SET' : 'NOT SET'
+    };
+    res.json(envVars);
+  });
+}
 
 // Serve Stripe public key
 app.get('/api/stripe/public-key', (req, res) => {
@@ -84,6 +87,7 @@ app.get('/api/stripe/public-key', (req, res) => {
 });
 
 // API routes
+app.use('/api/auth', authRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/stripe', stripeRoutes);
 app.use('/api/jobs', jobsRoutes);

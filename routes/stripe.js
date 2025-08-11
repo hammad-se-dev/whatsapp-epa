@@ -43,6 +43,9 @@ async function handlePaymentSuccess(paymentIntent) {
   try {
     const { id: paymentIntentId, metadata } = paymentIntent;
     
+    console.log(`💰 Processing payment success for: ${paymentIntentId}`);
+    console.log(`📋 Metadata:`, metadata);
+    
     if (metadata.type === 'job_application') {
       // Handle job application payment
       const application = await Application.findOne({ paymentIntentId })
@@ -50,9 +53,16 @@ async function handlePaymentSuccess(paymentIntent) {
         .populate('userId', 'whatsappNumber');
       
       if (application) {
+        console.log(`✅ Found application: ${application._id}`);
+        console.log(`   Job: ${application.jobId.title}`);
+        console.log(`   Applicant: ${application.applicantWhatsapp}`);
+        console.log(`   Current status: ${application.paymentStatus}`);
+        
         application.paymentStatus = 'completed';
         application.paymentDate = new Date();
         await application.save();
+        
+        console.log(`✅ Updated application payment status to: ${application.paymentStatus}`);
         
         // Update user state
         await User.findByIdAndUpdate(application.userId._id, {
@@ -399,6 +409,26 @@ router.get('/test-jobs', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching test jobs:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Manual webhook trigger for testing (remove in production)
+router.post('/test-webhook/:paymentIntentId', async (req, res) => {
+  try {
+    const { paymentIntentId } = req.params;
+    
+    // Get payment intent from Stripe
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    
+    if (paymentIntent.status === 'succeeded') {
+      await handlePaymentSuccess(paymentIntent);
+      res.json({ message: 'Webhook processed successfully', paymentIntent });
+    } else {
+      res.status(400).json({ error: 'Payment not succeeded', status: paymentIntent.status });
+    }
+  } catch (error) {
+    console.error('Test webhook error:', error);
     res.status(500).json({ error: error.message });
   }
 });

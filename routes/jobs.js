@@ -1,11 +1,12 @@
 import express from 'express';
 import axios from 'axios';
 import { Job, Application } from '../models/index.js';
+import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Get all jobs (for admin portal)
-router.get('/', async (req, res) => {
+// Get all jobs (for admin portal) - requires authentication
+router.get('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { status, category, page = 1, limit = 10 } = req.query;
     
@@ -38,7 +39,7 @@ router.get('/live', async (req, res) => {
   try {
     const { category, limit = 50 } = req.query;
     
-    const filter = { status: 'live' };
+    const filter = { status: 'live', paymentStatus: 'completed' };
     if (category) filter.category = category;
     
     const jobs = await Job.find(filter)
@@ -53,8 +54,8 @@ router.get('/live', async (req, res) => {
   }
 });
 
-// Get single job details
-router.get('/:id', async (req, res) => {
+// Get single job details - requires authentication
+router.get('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -83,8 +84,8 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Approve job (admin action)
-router.post('/approve/:id', async (req, res) => {
+// Approve job (admin action) - requires authentication
+router.post('/approve/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { adminNotes = '' } = req.body;
@@ -121,8 +122,8 @@ router.post('/approve/:id', async (req, res) => {
   }
 });
 
-// Reject job (admin action)
-router.post('/reject/:id', async (req, res) => {
+// Reject job (admin action) - requires authentication
+router.post('/reject/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { adminNotes = '', reason = '' } = req.body;
@@ -158,8 +159,8 @@ router.post('/reject/:id', async (req, res) => {
   }
 });
 
-// Get job applications
-router.get('/:id/applications', async (req, res) => {
+// Get job applications - requires authentication
+router.get('/:id/applications', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -191,8 +192,8 @@ router.get('/:id/applications', async (req, res) => {
   }
 });
 
-// Update application status
-router.patch('/applications/:applicationId/status', async (req, res) => {
+// Update application status - requires authentication
+router.patch('/applications/:applicationId/status', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { applicationId } = req.params;
     const { status } = req.body;
@@ -243,8 +244,8 @@ router.patch('/applications/:applicationId/status', async (req, res) => {
   }
 });
 
-// Get jobs by employer
-router.get('/employer/:employerId', async (req, res) => {
+// Get jobs by employer - requires authentication
+router.get('/employer/:employerId', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { employerId } = req.params;
     const { status, page = 1, limit = 10 } = req.query;
@@ -285,8 +286,8 @@ router.get('/employer/:employerId', async (req, res) => {
   }
 });
 
-// Get job analytics
-router.get('/analytics/summary', async (req, res) => {
+// Get job analytics - requires authentication
+router.get('/analytics/summary', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const totalJobs = await Job.countDocuments();
     const liveJobs = await Job.countDocuments({ status: 'live' });

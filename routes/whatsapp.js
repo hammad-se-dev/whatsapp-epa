@@ -119,6 +119,10 @@ async function processMessage(user, message) {
     return handleStatusCommand(user);
   }
   
+  if (msg === 'applications') {
+    return handleApplicationsCommand(user);
+  }
+  
   switch (user.conversationState) {
     case 'new_user':
       return handleNewUser(user);
@@ -163,7 +167,8 @@ function getMainMenu(user) {
     `• Type *"status"* to check your applications\n\n` +
     `💼 *For Employers:*\n` +
     `• Type *"post job"* or *"job posting"* to hire talent\n` +
-    `• Type *"status"* to check your job posts\n\n` +
+    `• Type *"status"* to check your job posts\n` +
+    `• Type *"applications"* to see who applied to your jobs\n\n` +
     `🛠️ *Other Commands:*\n` +
     `• Type *"help"* or *"menu"* to see this menu\n` +
     `• Type *"restart"* to start fresh\n\n` +
@@ -300,10 +305,11 @@ async function handleCategorySelection(user, message) {
   user.conversationState = 'employee_viewing_jobs';
   await user.save();
   
-  // Find live jobs in the selected category
+  // Find approved and paid jobs in the selected category
   const jobs = await Job.find({ 
     category: selectedCategory, 
-    status: 'live' 
+    status: 'live',
+    paymentStatus: 'completed'
   }).limit(5).sort({ createdAt: -1 });
   
   if (jobs.length === 0) {
@@ -341,7 +347,8 @@ async function handleJobViewing(user, message) {
     // Check if this is from the "no jobs available" scenario
     const jobs = await Job.find({ 
       category: user.preferredCategory, 
-      status: 'live' 
+      status: 'live',
+      paymentStatus: 'completed'
     });
     
     if (jobs.length === 0) {
@@ -352,10 +359,11 @@ async function handleJobViewing(user, message) {
     }
   }
   
-  // Get jobs in user's preferred category
+  // Get approved and paid jobs in user's preferred category
   const jobs = await Job.find({ 
     category: user.preferredCategory, 
-    status: 'live' 
+    status: 'live',
+    paymentStatus: 'completed'
   }).limit(5).sort({ createdAt: -1 });
   
   if (isNaN(choice) || choice < 1 || choice > jobs.length) {
@@ -795,6 +803,51 @@ async function handleStatusCommand(user) {
     
     return statusMsg + `Type *"post job"* to create another posting!`;
   }
+}
+
+async function handleApplicationsCommand(user) {
+  if (!user.role || user.role !== 'employer') {
+    return `This command is only available for employers. Type *"post job"* to start posting jobs.`;
+  }
+  
+  // Get all jobs posted by this employer
+  const jobs = await Job.find({ employerId: user._id })
+    .sort({ createdAt: -1 });
+  
+  if (jobs.length === 0) {
+    return `You haven't posted any jobs yet. Type *"post job"* to get started!`;
+  }
+  
+  let applicationsMsg = `📋 *Applications for Your Jobs:*\n\n`;
+  
+  for (const job of jobs) {
+    // Get applications for this job
+    const applications = await Application.find({ jobId: job._id })
+      .populate('userId', 'whatsappNumber')
+      .sort({ applicationDate: -1 });
+    
+    applicationsMsg += `*${job.title}* (${job.companyName})\n`;
+    applicationsMsg += `Status: ${job.status} | Payment: ${job.paymentStatus}\n`;
+    applicationsMsg += `Applications: ${applications.length}\n\n`;
+    
+    if (applications.length > 0) {
+      applications.forEach((app, index) => {
+        applicationsMsg += `  ${index + 1}. WhatsApp: ${app.applicantWhatsapp}\n`;
+        applicationsMsg += `     Applied: ${app.applicationDate.toLocaleDateString()}\n`;
+        applicationsMsg += `     Status: ${app.applicationStatus}\n`;
+        applicationsMsg += `     Payment: ${app.paymentStatus}\n\n`;
+      });
+    }
+    
+    applicationsMsg += `---\n\n`;
+  }
+  
+  applicationsMsg += `💡 *Tips:*\n`;
+  applicationsMsg += `• Only applications with completed payments are valid\n`;
+  applicationsMsg += `• Contact applicants via their WhatsApp number\n`;
+  applicationsMsg += `• Type *"status"* to see your job posts\n`;
+  
+  return applicationsMsg;
 }
 
 export default router;
